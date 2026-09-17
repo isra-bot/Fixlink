@@ -519,11 +519,14 @@ let state = {
   currentUser: null,
   authMode: 'login',
   authError: '',
+  authRole: 'customer',
 };
 let requests = [];
 let chats = {};
+let dbPros = [];
 let unsubRequests = null;
 let unsubChat = null;
+let unsubPros = null;
 let favorites = loadLS('fx_favorites', []);
 let proProfile = loadLS('fx_proprofile', {availStatus:'available', emergency:false, verified:false, services:[...SEED_PROS[0].services]});
 
@@ -566,6 +569,11 @@ function renderAuth(){
         <p>${t('tagline')}</p>
       </div>
       ${state.authError ? `<div class="info-card" style="border:1px solid var(--clay)"><p style="color:var(--clay); margin:0">${escapeHtml(state.authError)}</p></div>` : ''}
+      ${isSignup ? `
+      <div class="filters-row" style="margin-bottom:4px">
+        <div class="chip ${state.authRole==='customer'?'active':''}" onclick="setAuthRole('customer')">${state.lang==='fr'?'👤 Je suis client':'👤 I am a customer'}</div>
+        <div class="chip ${state.authRole==='professional'?'active':''}" onclick="setAuthRole('professional')">${state.lang==='fr'?'🛠️ Je suis professionnel':'🛠️ I am a professional'}</div>
+      </div>` : ''}
       <form class="field-set" onsubmit="submitAuth(event)">
         ${isSignup ? `
         <div class="field"><label>${t('fullName')}</label><input id="auth_name" required></div>
@@ -575,7 +583,13 @@ function renderAuth(){
             <option>Douala</option><option>Yaoundé</option><option>Bafoussam</option><option>Buea</option>
             <option>Limbe</option><option>Bamenda</option><option>Garoua</option><option>Maroua</option>
           </select>
-        </div>` : ''}
+        </div>
+        ${state.authRole==='professional' ? `
+        <div class="field"><label>${t('category')}</label>
+          <select id="auth_cat">${CATEGORIES.map(c=>`<option value="${c.id}">${c.ic} ${c[state.lang]}</option>`).join('')}</select>
+        </div>
+        <div class="field"><label>${state.lang==='fr'?"Années d'expérience":'Years of experience'}</label><input id="auth_years" type="number" min="0" placeholder="3"></div>
+        ` : ''}` : ''}
         <div class="field"><label>Email</label><input id="auth_email" type="email" required></div>
         <div class="field"><label>${t('password')}</label><input id="auth_password" type="password" minlength="6" required></div>
         <button class="btn btn-primary" type="submit" id="authSubmitBtn">${isSignup ? t('createAccount') : t('logIn')}</button>
@@ -588,6 +602,7 @@ function renderAuth(){
   `;
 }
 function toggleAuthMode(){ state.authMode = state.authMode==='login' ? 'signup' : 'login'; state.authError=''; render(); }
+function setAuthRole(r){ state.authRole = r; render(); }
 async function submitAuth(e){
   e.preventDefault();
   state.authError = '';
@@ -601,11 +616,24 @@ async function submitAuth(e){
       const name = document.getElementById('auth_name').value.trim();
       const phone = document.getElementById('auth_phone').value.trim();
       const city = document.getElementById('auth_city').value;
+      const role = state.authRole === 'professional' ? 'professional' : 'customer';
       const cred = await window.fb.createUserWithEmailAndPassword(window.fb.auth, email, password);
       await window.fb.setDoc(window.fb.doc(window.fb.db, 'users', cred.user.uid), {
-        name, phone, city, email, createdAt: window.fb.serverTimestamp()
+        name, phone, city, email, role, createdAt: window.fb.serverTimestamp()
       });
-      state.currentUser = { uid: cred.user.uid, email, name, phone, city };
+      if(role === 'professional'){
+        const cat = document.getElementById('auth_cat').value;
+        const years = +document.getElementById('auth_years').value || 0;
+        await window.fb.setDoc(window.fb.doc(window.fb.db, 'professionals', cred.user.uid), {
+          name, cat, city, area:'', phone,
+          years, rating:0, reviews:0, jobs:0,
+          verified:false, availableNow:false, emergency:false,
+          priceType:'quote', price:0,
+          desc:{fr:'', en:''}, services:[],
+          createdAt: window.fb.serverTimestamp()
+        });
+      }
+      state.currentUser = { uid: cred.user.uid, email, name, phone, city, role };
       startFirestoreSync();
       render();
     } else {
@@ -645,7 +673,8 @@ async function logout(){
 }
 
 /* ===================== HELPERS ===================== */
-function getPro(id){ return SEED_PROS.find(p=>p.id===id); }
+function allPros(){ return [...dbPros, ...SEED_PROS]; }
+function getPro(id){ return dbPros.find(p=>p.id===id) || SEED_PROS.find(p=>p.id===id); }
 function fmtMoney(n){ return n.toLocaleString('fr-FR') + ' FCFA'; }
 function proPriceLabel(p){
   if(p.priceType==='quote') return t('quoteRequired');
@@ -748,7 +777,7 @@ function renderCustomer(){
 }
 
 function customerHome(){
-  const recs = SEED_PROS.slice(0,5);
+  const recs = allPros().slice(0,5);
   return `
     <div class="hero">
       <h1>${t('whatService')}</h1>
@@ -777,9 +806,9 @@ function proCardHtml(p){
         <p class="pro-name">${p.name}</p>
         ${p.verified ? `<span class="badge">✓ ${t('verified')}</span>` : `<span class="badge na">${t('notVerified')}</span>`}
       </div>
-      <div class="pro-cat">${catLabel(p.cat)} · ${p.area}, ${p.city}</div>
+      <div class="pro-cat">${catLabel(p.cat)} · ${p.area ? p.area+', ' : ''}${p.city}</div>
       <div class="pro-meta">
-        <span><span class="star">★</span> ${p.rating} (${p.reviews})</span>
+        ${p.reviews>0 ? `<span><span class="star">★</span> ${p.rating} (${p.reviews})</span>` : `<span>${state.lang==='fr'?'Nouveau':'New'}</span>`}
         <span>${p.jobs} ${t('jobsDone')}</span>
       </div>
       <div class="pro-meta" style="margin-top:4px">
@@ -794,9 +823,9 @@ function openPro(id){ state.activeProId = id; nav('proDetail'); }
 
 function customerSearch(){
   const q = (state.searchQuery||'').toLowerCase();
-  let results = SEED_PROS.filter(p=>{
+  let results = allPros().filter(p=>{
     const matchesCat = !state.filterCat || p.cat===state.filterCat;
-    const matchesQ = !q || p.name.toLowerCase().includes(q) || catLabel(p.cat).toLowerCase().includes(q) || p.city.toLowerCase().includes(q) || p.area.toLowerCase().includes(q);
+    const matchesQ = !q || p.name.toLowerCase().includes(q) || catLabel(p.cat).toLowerCase().includes(q) || p.city.toLowerCase().includes(q) || (p.area||'').toLowerCase().includes(q);
     return matchesCat && matchesQ;
   });
   return `
@@ -823,7 +852,7 @@ function proDetail(){
     <div class="profile-hero">
       <div class="avatar" style="${avatarStyle(p.name)}">${initialsOf(p.name)}</div>
       <h2>${p.name}</h2>
-      <div class="cat">${catLabel(p.cat)} · ${p.area}, ${p.city}</div>
+      <div class="cat">${catLabel(p.cat)} · ${p.area ? p.area+', ' : ''}${p.city}</div>
       ${p.verified ? `<span class="badge">✓ ${t('verified')}</span>` : `<span class="badge na">${t('notVerified')}</span>`}
       <div class="stat-row">
         <div><div class="n">★ ${p.rating}</div><div class="l">${p.reviews} avis</div></div>
@@ -841,11 +870,11 @@ function proDetail(){
 
     <div class="info-card" style="margin-top:18px">
       <h3>${state.lang==='fr'?'À propos':'About'}</h3>
-      <p>${p.desc[state.lang]}</p>
+      <p>${(p.desc && p.desc[state.lang]) ? p.desc[state.lang] : (state.lang==='fr'?'Aucune description pour le moment.':'No description yet.')}</p>
     </div>
     <div class="info-card">
       <h3>${t('myServices')}</h3>
-      ${p.services.map(s=>`<div class="service-row"><span>${s.name[state.lang]}</span><span class="p">${state.lang==='fr'?s.price:s.priceEn}</span></div>`).join('')}
+      ${(p.services&&p.services.length) ? p.services.map(s=>`<div class="service-row"><span>${s.name[state.lang]}</span><span class="p">${state.lang==='fr'?s.price:s.priceEn}</span></div>`).join('') : `<p style="font-size:13px;color:var(--muted);margin:0">${state.lang==='fr'?'Aucun service ajouté pour le moment.':'No services added yet.'}</p>`}
     </div>
     <div class="info-card">
       <h3>${state.lang==='fr'?'Avis':'Reviews'}</h3>
@@ -880,11 +909,11 @@ function requestForm(){
     <p class="page-sub">${p.name} · ${catLabel(p.cat)}</p>
     <form class="field-set" onsubmit="submitRequest(event)">
       <div class="field"><label>${state.lang==='fr'?'Service':'Service'}</label>
-        <select id="rf_service">${p.services.map(s=>`<option>${s.name[state.lang]}</option>`).join('')}</select></div>
+        <select id="rf_service">${(p.services&&p.services.length) ? p.services.map(s=>`<option>${s.name[state.lang]}</option>`).join('') : `<option>${state.lang==='fr'?'Autre / Non listé':'Other / Not listed'}</option>`}</select></div>
       <div class="field"><label>${t('describeProblem')}</label>
         <textarea id="rf_desc" placeholder="${state.lang==='fr'?'Ex: Mon frigo ne refroidit plus...':'Ex: My fridge is no longer cooling...'}" required></textarea></div>
       <div class="field"><label>${t('preferredDate')}</label><input type="date" id="rf_date"></div>
-      <div class="field"><label>${t('neighborhood')}</label><input id="rf_hood" placeholder="${p.area}" value="${p.area}"></div>
+      <div class="field"><label>${t('neighborhood')}</label><input id="rf_hood" placeholder="${p.area||''}" value="${p.area||''}"></div>
       <div class="field"><label>${t('landmark')}</label><input id="rf_landmark" placeholder="${state.lang==='fr'?'Ex: près de la pharmacie...':'Ex: near the pharmacy...'}"></div>
       <div class="field"><label>${t('budget')}</label><input type="number" id="rf_budget" placeholder="10000"></div>
       <div class="field"><label>${t('photos')}</label>
@@ -939,7 +968,7 @@ function customerBookings(){
       return `<div class="booking-card" onclick="openBooking('${r.id}')">
         <div class="booking-top"><h4>${p.name}</h4><span class="status-chip sc-${r.status}">${statusLabel(r.status)}</span></div>
         <div class="booking-meta">${r.service} · ${catLabel(p.cat)}</div>
-        <div class="booking-meta">${r.neighborhood || p.area}, ${p.city}</div>
+        <div class="booking-meta">${r.neighborhood || p.area || ''}, ${p.city}</div>
       </div>`;
     }).join('')}
   `;
@@ -988,7 +1017,7 @@ function bookingDetail(){
 
   return `
     <h1 class="page-title">${p.name}</h1>
-    <p class="page-sub">${r.service} · ${r.neighborhood || p.area}, ${p.city}</p>
+    <p class="page-sub">${r.service} · ${r.neighborhood || p.area || ''}, ${p.city}</p>
     ${isTerminal ? `<div class="info-card"><span class="status-chip sc-${r.status}">${statusLabel(r.status)}</span></div>` : `<div class="status-track">${steps}</div>`}
     ${quoteBlock}
     <div class="info-card">
@@ -1165,15 +1194,24 @@ function renderProfessional(){
     default: return proDashboard();
   }
 }
-function myRequests(){ return requests; } // demo: pro sees all seeded customer requests
+function myRequests(){
+  if(state.currentUser && state.currentUser.role==='professional'){
+    return requests.filter(r=>r.proId===state.currentUser.uid);
+  }
+  return requests; // demo/preview: show everything when not a real professional account
+}
+function isRealPro(){ return !!(state.currentUser && state.currentUser.role==='professional'); }
 function proDashboard(){
-  const newReq = requests.filter(r=>r.status==='Requested').length;
-  const active = requests.filter(r=>['Accepted','Scheduled','OnTheWay','Started'].includes(r.status)).length;
-  const completed = requests.filter(r=>r.status==='Completed').length;
-  const earnings = requests.filter(r=>r.status==='Completed' && r.quote).reduce((s,r)=>s+r.quote.total,0);
+  const list = myRequests();
+  const newReq = list.filter(r=>r.status==='Requested').length;
+  const active = list.filter(r=>['Accepted','Scheduled','OnTheWay','Started'].includes(r.status)).length;
+  const completed = list.filter(r=>r.status==='Completed').length;
+  const earnings = list.filter(r=>r.status==='Completed' && r.quote).reduce((s,r)=>s+r.quote.total,0);
+  const welcomeName = isRealPro() ? state.currentUser.name : SEED_PROS[0].name;
   return `
     <h1 class="page-title">${t('dashboard')}</h1>
-    <p class="page-sub">${state.lang==='fr'?'Bienvenue,':'Welcome,'} ${SEED_PROS[0].name}</p>
+    <p class="page-sub">${state.lang==='fr'?'Bienvenue,':'Welcome,'} ${escapeHtml(welcomeName)}</p>
+    ${!isRealPro() ? `<div class="info-card" style="padding:10px 14px"><p style="margin:0;font-size:12px;color:var(--muted)">${state.lang==='fr'?'Mode démonstration — inscrivez-vous en tant que professionnel pour voir vos propres demandes.':'Demo mode — sign up as a professional to see your own requests.'}</p></div>` : ''}
     <div class="stat-grid">
       <div class="stat-box"><div class="n">${newReq}</div><div class="l">${t('newReq')}</div></div>
       <div class="stat-box"><div class="n">${active}</div><div class="l">${t('activeJobs')}</div></div>
@@ -1188,29 +1226,29 @@ function proDashboard(){
       <div class="qa-btn" onclick="proNav('pd_jobs')"><span class="ic">🧰</span>${t('jobs')}</div>
     </div>
     <div class="section-head"><h2>${t('upcoming')}</h2></div>
-    ${requests.filter(r=>['Accepted','Scheduled'].includes(r.status)).slice(0,3).map(proBookingCard).join('') || `<p class="page-sub">—</p>`}
+    ${list.filter(r=>['Accepted','Scheduled'].includes(r.status)).slice(0,3).map(proBookingCard).join('') || `<p class="page-sub">—</p>`}
   `;
 }
 function proBookingCard(r){
   return `<div class="booking-card" onclick="openProBooking('${r.id}')">
     <div class="booking-top"><h4>${escapeHtml(r.customerName)}</h4><span class="status-chip sc-${r.status}">${statusLabel(r.status)}</span></div>
-    <div class="booking-meta">${r.service}</div>
-    <div class="booking-meta">${r.neighborhood}</div>
+    <div class="booking-meta">${escapeHtml(r.service)}</div>
+    <div class="booking-meta">${escapeHtml(r.neighborhood)}</div>
   </div>`;
 }
 function proRequests(){
-  const list = requests.filter(r=>r.status==='Requested');
+  const list = myRequests().filter(r=>r.status==='Requested');
   if(!list.length) return `<h1 class="page-title">${t('requests')}</h1>
     <div class="empty-state"><div class="ic">📥</div><h3>${t('noRequests')}</h3></div>`;
   return `<h1 class="page-title">${t('requests')}</h1>
     ${list.map(r=>`<div class="booking-card" onclick="openProBooking('${r.id}')">
       <div class="booking-top"><h4>${escapeHtml(r.customerName)}</h4><span class="status-chip sc-${r.status}">${statusLabel(r.status)}</span></div>
-      <div class="booking-meta">${r.service}</div>
-      <div class="booking-meta">${r.desc.slice(0,60)}${r.desc.length>60?'…':''}</div>
+      <div class="booking-meta">${escapeHtml(r.service)}</div>
+      <div class="booking-meta">${escapeHtml(r.desc.slice(0,60))}${r.desc.length>60?'…':''}</div>
     </div>`).join('')}`;
 }
 function proJobs(){
-  const list = requests.filter(r=>!['Requested'].includes(r.status));
+  const list = myRequests().filter(r=>!['Requested'].includes(r.status));
   if(!list.length) return `<h1 class="page-title">${t('jobs')}</h1>
     <div class="empty-state"><div class="ic">🧰</div><h3>—</h3></div>`;
   return `<h1 class="page-title">${t('jobs')}</h1>${list.map(proBookingCard).join('')}`;
@@ -1269,8 +1307,41 @@ async function proMarkComplete(id){
   }
 }
 function proProfileScreen(){
+  if(isRealPro()){
+    const me = dbPros.find(p=>p.id===state.currentUser.uid) || {};
+    const services = me.services || [];
+    return `
+      <h1 class="page-title">${t('profile')}</h1>
+      <div class="profile-hero" style="padding-top:0">
+        <div class="avatar" style="${avatarStyle(me.name||state.currentUser.name)}">${initialsOf(me.name||state.currentUser.name)}</div>
+        <h2>${escapeHtml(me.name||state.currentUser.name)}</h2>
+        <div class="cat">${catLabel(me.cat)} · ${escapeHtml(me.city||'')}</div>
+        ${me.verified ? `<span class="badge">✓ ${t('verified')}</span>` : `<span class="badge na">${t('verificationPending')}</span>`}
+      </div>
+      <div class="info-card" style="padding:6px 16px">
+        <div class="toggle-row"><div><div class="lbl">${t('availability')}</div><div class="sub">${me.availableNow?t('setAvailable'):t('setBusy')}</div></div>
+          <div class="switch ${me.availableNow?'on':''}" onclick="toggleAvail()"><div class="knob"></div></div></div>
+        <div class="toggle-row"><div><div class="lbl">${t('emergencyAvail')}</div></div>
+          <div class="switch ${me.emergency?'on':''}" onclick="toggleEmergency()"><div class="knob"></div></div></div>
+      </div>
+      <div class="info-card">
+        <h3>${t('myServices')}</h3>
+        ${services.length ? services.map(s=>`<div class="service-row"><span>${s.name[state.lang]}</span><span class="p">${state.lang==='fr'?s.price:s.priceEn}</span></div>`).join('') : `<p style="font-size:13px;color:var(--muted);margin:0">${state.lang==='fr'?'Aucun service ajouté pour le moment.':'No services added yet.'}</p>`}
+        <button class="btn btn-outline btn-sm" style="margin-top:10px; width:100%" onclick="addService()">+ ${t('addService')}</button>
+      </div>
+      <div class="info-card" style="padding:4px 16px">
+        ${rowLink('🌐', t('language')+': '+ (state.lang==='fr'?'Français':'English'), null, 'toggleLang()')}
+      </div>
+      <div class="info-card" style="padding:6px 16px">
+        <div class="toggle-row"><div><div class="lbl">${t('darkMode')}</div></div>
+          <div class="switch ${state.theme==='dark'?'on':''}" onclick="toggleTheme()"><div class="knob"></div></div></div>
+      </div>
+      <button class="btn btn-outline" style="color:var(--clay); border-color:var(--clay)" onclick="logout()">${t('logout')}</button>
+    `;
+  }
   return `
     <h1 class="page-title">${t('profile')}</h1>
+    <div class="info-card" style="padding:10px 14px"><p style="margin:0;font-size:12px;color:var(--muted)">${state.lang==='fr'?'Mode démonstration — ceci est le profil type d\'un professionnel exemple.':'Demo mode — this is a sample professional profile.'}</p></div>
     <div class="profile-hero" style="padding-top:0">
       <div class="avatar" style="${avatarStyle(SEED_PROS[0].name)}">${initialsOf(SEED_PROS[0].name)}</div>
       <h2>${SEED_PROS[0].name}</h2>
@@ -1298,13 +1369,41 @@ function proProfileScreen(){
     <button class="btn btn-outline" style="color:var(--clay); border-color:var(--clay)" onclick="logout()">${t('logout')}</button>
   `;
 }
-function toggleAvail(){ proProfile.availStatus = proProfile.availStatus==='available'?'busy':'available'; persistAll(); render(); }
-function toggleEmergency(){ proProfile.emergency = !proProfile.emergency; persistAll(); render(); }
+async function updateMyProDoc(data){
+  try{
+    await window.fb.updateDoc(window.fb.doc(window.fb.db,'professionals',state.currentUser.uid), data);
+  }catch(err){
+    showToast(state.lang==='fr' ? 'Échec — vérifiez votre connexion.' : 'Failed — check your connection.');
+  }
+}
+function toggleAvail(){
+  if(isRealPro()){
+    const me = dbPros.find(p=>p.id===state.currentUser.uid) || {};
+    updateMyProDoc({availableNow: !me.availableNow});
+    return;
+  }
+  proProfile.availStatus = proProfile.availStatus==='available'?'busy':'available'; persistAll(); render();
+}
+function toggleEmergency(){
+  if(isRealPro()){
+    const me = dbPros.find(p=>p.id===state.currentUser.uid) || {};
+    updateMyProDoc({emergency: !me.emergency});
+    return;
+  }
+  proProfile.emergency = !proProfile.emergency; persistAll(); render();
+}
 function addService(){
   const name = prompt(state.lang==='fr' ? 'Nom du service :' : 'Service name:');
   if(!name) return;
   const price = prompt(state.lang==='fr' ? 'Prix (ex: À partir de 5,000 FCFA) :' : 'Price (e.g. From 5,000 FCFA):');
-  proProfile.services.push({name:{fr:name,en:name}, price: price||'—', priceEn: price||'—'});
+  const newService = {name:{fr:name,en:name}, price: price||'—', priceEn: price||'—'};
+  if(isRealPro()){
+    const me = dbPros.find(p=>p.id===state.currentUser.uid) || {};
+    const services = [...(me.services||[]), newService];
+    updateMyProDoc({services});
+    return;
+  }
+  proProfile.services.push(newService);
   persistAll(); render();
 }
 
@@ -1321,12 +1420,12 @@ function adminOverview(){
   const activeB = requests.filter(r=>!['Completed','Cancelled'].includes(r.status)).length;
   const completedB = requests.filter(r=>r.status==='Completed').length;
   const disputes = requests.filter(r=>r.status==='Disputed').length;
-  const verifiedCount = SEED_PROS.filter(p=>p.verified).length + (proProfile.verified?1:0);
+  const verifiedCount = allPros().filter(p=>p.verified).length;
   const revenue = requests.filter(r=>r.status==='Completed' && r.quote).reduce((s,r)=>s+Math.round(r.quote.total*0.05),0);
   return `
     <h1 class="page-title">${t('adminOverview')}</h1>
     <div class="stat-grid">
-      <div class="stat-box"><div class="n">${SEED_PROS.length+1}</div><div class="l">${t('totalPros')}</div></div>
+      <div class="stat-box"><div class="n">${allPros().length}</div><div class="l">${t('totalPros')}</div></div>
       <div class="stat-box"><div class="n">128</div><div class="l">${t('totalCustomers')}</div></div>
       <div class="stat-box"><div class="n">${verifiedCount}</div><div class="l">${t('verifiedPros')}</div></div>
       <div class="stat-box"><div class="n">${activeB}</div><div class="l">${t('activeBookings')}</div></div>
@@ -1340,18 +1439,23 @@ function adminOverview(){
   `;
 }
 function adminVerify(){
-  const pending = [...SEED_PROS.filter(p=>!p.verified), ...(proProfile.verified?[]:[{id:'me', name: SEED_PROS[0].name+' (Pro Account)', cat: SEED_PROS[0].cat}])];
+  const pending = [...dbPros.filter(p=>!p.verified), ...SEED_PROS.filter(p=>!p.verified)];
   if(!pending.length) return `<h1 class="page-title">${t('pendingVerif')}</h1><div class="empty-state"><div class="ic">✅</div><h3>—</h3></div>`;
   return `<h1 class="page-title">${t('pendingVerif')}</h1>
     ${pending.map(p=>`<div class="verify-row">
       <div class="avatar" style="${avatarStyle(p.name)}; width:42px;height:42px;font-size:13px;border-radius:10px">${initialsOf(p.name)}</div>
-      <div class="info"><div class="n">${p.name}</div><div class="s">${catLabel(p.cat)}</div></div>
+      <div class="info"><div class="n">${escapeHtml(p.name)}</div><div class="s">${catLabel(p.cat)}</div></div>
       <button class="btn btn-primary btn-sm" onclick="approveVerify('${p.id}')">${t('approve')}</button>
     </div>`).join('')}`;
 }
-function approveVerify(id){
-  if(id==='me'){ proProfile.verified = true; } else { const p = getPro(id); if(p) p.verified = true; }
-  persistAll(); showToast(state.lang==='fr'?'Professionnel vérifié !':'Professional verified!'); render();
+async function approveVerify(id){
+  if(dbPros.find(p=>p.id===id)){
+    try{ await window.fb.updateDoc(window.fb.doc(window.fb.db,'professionals',id), {verified:true}); }
+    catch(err){ showToast(state.lang==='fr'?'Échec — vérifiez votre connexion.':'Failed — check your connection.'); return; }
+  } else {
+    const p = getPro(id); if(p) p.verified = true;
+  }
+  showToast(state.lang==='fr'?'Professionnel vérifié !':'Professional verified!'); render();
 }
 function adminReports(){
   const disputes = requests.filter(r=>r.status==='Disputed');
@@ -1360,7 +1464,7 @@ function adminReports(){
   return `<h1 class="page-title">${t('reports')} & ${t('disputes')}</h1>
     ${disputes.map(r=>{
       const p = getPro(r.proId);
-      return `<div class="booking-card"><div class="booking-top"><h4>${p.name}</h4><span class="status-chip sc-Disputed">${statusLabel('Disputed')}</span></div>
+      return `<div class="booking-card"><div class="booking-top"><h4>${escapeHtml(p.name)}</h4><span class="status-chip sc-Disputed">${statusLabel('Disputed')}</span></div>
       <div class="booking-meta">${escapeHtml(r.service)} · ${escapeHtml(r.customerName)}</div></div>`;
     }).join('')}`;
 }
@@ -1371,6 +1475,12 @@ function startFirestoreSync(){
   const q = window.fb.query(window.fb.collection(window.fb.db,'requests'), window.fb.orderBy('createdAt','desc'));
   unsubRequests = window.fb.onSnapshot(q, (snap)=>{
     requests = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    render();
+  }, (err)=>{ console.error(err); });
+
+  if(unsubPros) unsubPros();
+  unsubPros = window.fb.onSnapshot(window.fb.collection(window.fb.db,'professionals'), (snap)=>{
+    dbPros = snap.docs.map(d=>({id:d.id, ...d.data()}));
     render();
   }, (err)=>{ console.error(err); });
 }
@@ -1384,7 +1494,8 @@ window.onFirebaseAuthChange = async function(user){
     state.currentUser = null;
     if(unsubRequests){ unsubRequests(); unsubRequests = null; }
     if(unsubChat){ unsubChat(); unsubChat = null; }
-    requests = []; chats = {};
+    if(unsubPros){ unsubPros(); unsubPros = null; }
+    requests = []; chats = {}; dbPros = [];
     render();
     return;
   }
