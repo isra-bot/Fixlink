@@ -609,21 +609,29 @@ async function submitAuth(e){
   const email = document.getElementById('auth_email').value.trim();
   const password = document.getElementById('auth_password').value;
   const btn = document.getElementById('authSubmitBtn');
+  // Capture every field we'll need BEFORE any await — once the account is created,
+  // a background listener may swap out this whole form, and reading the DOM after
+  // that point would silently fail.
+  let name, phone, city, role, cat, years;
+  if(state.authMode === 'signup'){
+    name = document.getElementById('auth_name').value.trim();
+    phone = document.getElementById('auth_phone').value.trim();
+    city = document.getElementById('auth_city').value;
+    role = state.authRole === 'professional' ? 'professional' : 'customer';
+    if(role === 'professional'){
+      cat = document.getElementById('auth_cat').value;
+      years = +document.getElementById('auth_years').value || 0;
+    }
+  }
   btn.disabled = true;
   btn.textContent = state.lang==='fr' ? 'Patientez...' : 'Please wait...';
   try{
     if(state.authMode === 'signup'){
-      const name = document.getElementById('auth_name').value.trim();
-      const phone = document.getElementById('auth_phone').value.trim();
-      const city = document.getElementById('auth_city').value;
-      const role = state.authRole === 'professional' ? 'professional' : 'customer';
       const cred = await window.fb.createUserWithEmailAndPassword(window.fb.auth, email, password);
       await window.fb.setDoc(window.fb.doc(window.fb.db, 'users', cred.user.uid), {
         name, phone, city, email, role, createdAt: window.fb.serverTimestamp()
       });
       if(role === 'professional'){
-        const cat = document.getElementById('auth_cat').value;
-        const years = +document.getElementById('auth_years').value || 0;
         await window.fb.setDoc(window.fb.doc(window.fb.db, 'professionals', cred.user.uid), {
           name, cat, city, area:'', phone,
           years, rating:0, reviews:0, jobs:0,
