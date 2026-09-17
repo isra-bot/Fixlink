@@ -1075,7 +1075,19 @@ function setStars(n){
   for(let i=1;i<=5;i++){ const el = document.getElementById('star'+i); if(el) el.style.color = i<=n ? 'var(--ochre-2)' : 'var(--line)'; }
 }
 async function submitReview(id){
-  await updateDocSafe(id, {reviewed:true, myRating: window.__selStars||5});
+  const r = requests.find(x=>x.id===id);
+  const stars = window.__selStars||5;
+  await updateDocSafe(id, {reviewed:true, myRating: stars});
+  const pro = r && dbPros.find(p=>p.id===r.proId);
+  if(pro){
+    const newReviews = (pro.reviews||0) + 1;
+    const newRating = Math.round((((pro.rating||0) * (pro.reviews||0) + stars) / newReviews) * 10) / 10;
+    try{
+      await window.fb.updateDoc(window.fb.doc(window.fb.db,'professionals',r.proId), {
+        reviews: newReviews, rating: newRating, jobs: (pro.jobs||0) + 1
+      });
+    }catch(e){ /* professional's own listing stats — non-fatal if it fails */ }
+  }
   showToast(t('reviewSent')); nav('bookingsScreen', false);
 }
 
