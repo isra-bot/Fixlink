@@ -708,7 +708,9 @@ function render(){
   document.getElementById('roleSwitch').style.display = 'flex';
 
   // role switch
-  const roles = [['customer', state.lang==='fr'?'Client':'Customer'], ['professional', state.lang==='fr'?'Pro':'Pro'], ['admin','Admin']];
+  const roles = [['customer', state.lang==='fr'?'Client':'Customer'], ['professional', state.lang==='fr'?'Pro':'Pro']];
+  if(state.currentUser.isAdmin) roles.push(['admin','Admin']);
+  if(state.role==='admin' && !state.currentUser.isAdmin) state.role='customer';
   document.getElementById('roleSwitch').innerHTML = roles.map(([id,lb])=>
     `<button class="${state.role===id?'active':''}" onclick="setRole('${id}')">${lb}</button>`).join('');
 
@@ -1215,23 +1217,26 @@ function renderProfessional(){
   }
 }
 function myRequests(){
-  if(state.currentUser && state.currentUser.role==='professional'){
-    return requests.filter(r=>r.proId===state.currentUser.uid);
-  }
-  return requests; // demo/preview: show everything when not a real professional account
+  return requests.filter(r=>r.proId===state.currentUser.uid);
 }
 function isRealPro(){ return !!(state.currentUser && state.currentUser.role==='professional'); }
+function notProCta(){
+  return `<div class="empty-state"><div class="ic">🛠️</div>
+    <h3>${state.lang==='fr'?"Vous n'avez pas de compte professionnel":"You don't have a professional account"}</h3>
+    <p>${state.lang==='fr'?"Créez un compte professionnel pour recevoir de vraies demandes, gérer vos services et suivre vos missions.":'Create a professional account to receive real requests, manage your services, and track your jobs.'}</p>
+    <button class="btn btn-primary" onclick="logout()">${state.lang==='fr'?'Se déconnecter et créer un compte pro':'Log out and create a pro account'}</button>
+  </div>`;
+}
 function proDashboard(){
+  if(!isRealPro()) return `<h1 class="page-title">${t('dashboard')}</h1>${notProCta()}`;
   const list = myRequests();
   const newReq = list.filter(r=>r.status==='Requested').length;
   const active = list.filter(r=>['Accepted','Scheduled','OnTheWay','Started'].includes(r.status)).length;
   const completed = list.filter(r=>r.status==='Completed').length;
   const earnings = list.filter(r=>r.status==='Completed' && r.quote).reduce((s,r)=>s+r.quote.total,0);
-  const welcomeName = isRealPro() ? state.currentUser.name : SEED_PROS[0].name;
   return `
     <h1 class="page-title">${t('dashboard')}</h1>
-    <p class="page-sub">${state.lang==='fr'?'Bienvenue,':'Welcome,'} ${escapeHtml(welcomeName)}</p>
-    ${!isRealPro() ? `<div class="info-card" style="padding:10px 14px"><p style="margin:0;font-size:12px;color:var(--muted)">${state.lang==='fr'?'Mode démonstration — inscrivez-vous en tant que professionnel pour voir vos propres demandes.':'Demo mode — sign up as a professional to see your own requests.'}</p></div>` : ''}
+    <p class="page-sub">${state.lang==='fr'?'Bienvenue,':'Welcome,'} ${escapeHtml(state.currentUser.name)}</p>
     <div class="stat-grid">
       <div class="stat-box"><div class="n">${newReq}</div><div class="l">${t('newReq')}</div></div>
       <div class="stat-box"><div class="n">${active}</div><div class="l">${t('activeJobs')}</div></div>
@@ -1257,6 +1262,7 @@ function proBookingCard(r){
   </div>`;
 }
 function proRequests(){
+  if(!isRealPro()) return `<h1 class="page-title">${t('requests')}</h1>${notProCta()}`;
   const list = myRequests().filter(r=>r.status==='Requested');
   if(!list.length) return `<h1 class="page-title">${t('requests')}</h1>
     <div class="empty-state"><div class="ic">📥</div><h3>${t('noRequests')}</h3></div>`;
@@ -1268,6 +1274,7 @@ function proRequests(){
     </div>`).join('')}`;
 }
 function proJobs(){
+  if(!isRealPro()) return `<h1 class="page-title">${t('jobs')}</h1>${notProCta()}`;
   const list = myRequests().filter(r=>!['Requested'].includes(r.status));
   if(!list.length) return `<h1 class="page-title">${t('jobs')}</h1>
     <div class="empty-state"><div class="ic">🧰</div><h3>—</h3></div>`;
@@ -1359,35 +1366,7 @@ function proProfileScreen(){
       <button class="btn btn-outline" style="color:var(--clay); border-color:var(--clay)" onclick="logout()">${t('logout')}</button>
     `;
   }
-  return `
-    <h1 class="page-title">${t('profile')}</h1>
-    <div class="info-card" style="padding:10px 14px"><p style="margin:0;font-size:12px;color:var(--muted)">${state.lang==='fr'?'Mode démonstration — ceci est le profil type d\'un professionnel exemple.':'Demo mode — this is a sample professional profile.'}</p></div>
-    <div class="profile-hero" style="padding-top:0">
-      <div class="avatar" style="${avatarStyle(SEED_PROS[0].name)}">${initialsOf(SEED_PROS[0].name)}</div>
-      <h2>${SEED_PROS[0].name}</h2>
-      <div class="cat">${catLabel(SEED_PROS[0].cat)}</div>
-      ${proProfile.verified ? `<span class="badge">✓ ${t('verified')}</span>` : `<span class="badge na">${t('verificationPending')}</span>`}
-    </div>
-    <div class="info-card" style="padding:6px 16px">
-      <div class="toggle-row"><div><div class="lbl">${t('availability')}</div><div class="sub">${proProfile.availStatus==='available'?t('setAvailable'):t('setBusy')}</div></div>
-        <div class="switch ${proProfile.availStatus==='available'?'on':''}" onclick="toggleAvail()"><div class="knob"></div></div></div>
-      <div class="toggle-row"><div><div class="lbl">${t('emergencyAvail')}</div></div>
-        <div class="switch ${proProfile.emergency?'on':''}" onclick="toggleEmergency()"><div class="knob"></div></div></div>
-    </div>
-    <div class="info-card">
-      <h3>${t('myServices')}</h3>
-      ${proProfile.services.map(s=>`<div class="service-row"><span>${s.name[state.lang]}</span><span class="p">${state.lang==='fr'?s.price:s.priceEn}</span></div>`).join('')}
-      <button class="btn btn-outline btn-sm" style="margin-top:10px; width:100%" onclick="addService()">+ ${t('addService')}</button>
-    </div>
-    <div class="info-card" style="padding:4px 16px">
-      ${rowLink('🌐', t('language')+': '+ (state.lang==='fr'?'Français':'English'), null, 'toggleLang()')}
-    </div>
-    <div class="info-card" style="padding:6px 16px">
-      <div class="toggle-row"><div><div class="lbl">${t('darkMode')}</div></div>
-        <div class="switch ${state.theme==='dark'?'on':''}" onclick="toggleTheme()"><div class="knob"></div></div></div>
-    </div>
-    <button class="btn btn-outline" style="color:var(--clay); border-color:var(--clay)" onclick="logout()">${t('logout')}</button>
-  `;
+  return `<h1 class="page-title">${t('profile')}</h1>${notProCta()}`;
 }
 async function updateMyProDoc(data){
   try{
@@ -1529,6 +1508,10 @@ window.onFirebaseAuthChange = async function(user){
   }catch(e){
     if(!state.currentUser) state.currentUser = { uid: user.uid, email: user.email, name: (user.email||'').split('@')[0], phone:'', city:'' };
   }
+  try{
+    const adminSnap = await window.fb.getDoc(window.fb.doc(window.fb.db,'admins',user.uid));
+    state.currentUser.isAdmin = adminSnap.exists();
+  }catch(e){ state.currentUser.isAdmin = false; }
   startFirestoreSync();
   render();
 };
