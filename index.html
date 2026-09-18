@@ -523,10 +523,13 @@ let state = {
 };
 let requests = [];
 let chats = {};
+let chatMeta = {};
 let dbPros = [];
 let unsubRequests = null;
 let unsubChat = null;
 let unsubPros = null;
+let unsubChatMeta1 = null;
+let unsubChatMeta2 = null;
 let favorites = loadLS('fx_favorites', []);
 let proProfile = loadLS('fx_proprofile', {availStatus:'available', emergency:false, verified:false, services:[...SEED_PROS[0].services]});
 
@@ -1094,15 +1097,24 @@ async function submitReview(id){
 }
 
 /* Chat */
-function ensureChatSync(proId){
+function convId(proId, customerId){ return proId + '___' + customerId; }
+function ensureChatSync(cId, proId, customerId){
   if(unsubChat) unsubChat();
-  if(!chats[proId]) chats[proId] = [];
-  const q = window.fb.query(window.fb.collection(window.fb.db,'chats',proId,'messages'), window.fb.orderBy('createdAt'));
+  if(!chats[cId]) chats[cId] = [];
+  window.fb.setDoc(window.fb.doc(window.fb.db,'chats',cId), {
+    proId, customerId,
+    proName: (getPro(proId)||{}).name || '',
+    customerName: (isRealPro() && proId===state.currentUser.uid && customerId!==state.currentUser.uid)
+      ? ((requests.find(r=>r.customerId===customerId)||{}).customerName || '')
+      : (state.currentUser && state.currentUser.uid===customerId ? state.currentUser.name : ''),
+    updatedAt: window.fb.serverTimestamp()
+  }, {merge:true}).catch(()=>{});
+  const q = window.fb.query(window.fb.collection(window.fb.db,'chats',cId,'messages'), window.fb.orderBy('createdAt'));
   unsubChat = window.fb.onSnapshot(q, (snap)=>{
-    chats[proId] = snap.docs.map(d=>({id:d.id, ...d.data()}));
-    if(state.activeChatId===proId && (state.screen==='chatScreen' || state.proScreen==='pd_messages_chat')){
+    chats[cId] = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    if(state.activeChatId===cId && state.screen==='chatScreen'){
       const c = document.getElementById('chatMsgs');
-      if(c){ c.innerHTML = renderChatBubbles(chats[proId]); c.scrollTop = c.scrollHeight; }
+      if(c){ c.innerHTML = renderChatBubbles(chats[cId]); c.scrollTop = c.scrollHeight; }
     }
     if((state.role==='customer' && state.screen==='messagesScreen') || (state.role==='professional' && state.proScreen==='pd_messages')){
       render();
@@ -1110,35 +1122,54 @@ function ensureChatSync(proId){
   }, (err)=>{ console.error(err); });
 }
 function renderChatBubbles(msgs){
-  const mySide = state.role==='professional' ? 'pro' : 'customer';
+  const mySide = (state.role==='professional' && isRealPro()) ? 'pro' : 'customer';
   if(!msgs.length){
     return `<div class="bubble them">${state.lang==='fr' ? 'Bonjour, comment puis-je vous aider ?' : 'Hello, how can I help you?'}</div>`;
   }
   return msgs.map(m=>`<div class="bubble ${m.sender===mySide?'me':'them'}">${escapeHtml(m.text)}</div>`).join('');
 }
-function openChat(proId){ state.activeChatId = proId; ensureChatSync(proId); nav('chatScreen'); }
+function openChat(proId, otherCustomerId){
+  const customerId = otherCustomerId || state.currentUser.uid;
+  const cId = convId(proId, customerId);
+  state.activeChatId = cId;
+  state.activeChatProId = proId;
+  state.activeChatCustomerId = customerId;
+  ensureChatSync(cId, proId, customerId);
+  nav('chatScreen');
+}
 function messagesList(){
-  const ids = Object.keys(chats).filter(id=>chats[id] && chats[id].length);
-  if(!ids.length) return `<h1 class="page-title">${t('messages')}</h1>
+  const mine = Object.keys(chatMeta).filter(id=>{
+    const m = chatMeta[id];
+    return state.currentUser && (m.customerId===state.currentUser.uid || m.proId===state.currentUser.uid);
+  });
+  if(!mine.length) return `<h1 class="page-title">${t('messages')}</h1>
     <div class="empty-state"><div class="ic">💬</div><h3>${state.lang==='fr'?'Aucun message':'No messages'}</h3></div>`;
   return `<h1 class="page-title">${t('messages')}</h1>
-    ${ids.map(id=>{
-      const p = getPro(id); const msgs = chats[id]; const last = msgs[msgs.length-1];
-      return `<div class="chat-list-item" onclick="openChat('${id}')">
-        <div class="avatar" style="${avatarStyle(p.name)}; width:46px; height:46px; border-radius:12px; font-size:14px">${initialsOf(p.name)}</div>
-        <div class="txt"><div class="nm">${p.name}</div><div class="msg">${escapeHtml(last.text)}</div></div>
+    ${mine.map(id=>{
+      const m = chatMeta[id];
+      const iAmPro = m.proId === state.currentUser.uid;
+      const otherName = iAmPro ? (m.customerName || '—') : (m.proName || getPro(m.proId).name);
+      const otherId = iAmPro ? m.customerId : m.proId;
+      const lastText = m.lastMessage || '';
+      return `<div class="chat-list-item" onclick="openChat('${m.proId}','${m.customerId}')">
+        <div class="avatar" style="${avatarStyle(otherName)}; width:46px; height:46px; border-radius:12px; font-size:14px">${initialsOf(otherName)}</div>
+        <div class="txt"><div class="nm">${escapeHtml(otherName)}</div><div class="msg">${escapeHtml(lastText)}</div></div>
       </div>`;
     }).join('')}`;
 }
 function chatScreen(){
-  const p = getPro(state.activeChatId);
+  const proId = state.activeChatProId, customerId = state.activeChatCustomerId;
+  const iAmPro = proId === state.currentUser.uid;
+  const meta = chatMeta[state.activeChatId] || {};
+  const otherName = iAmPro ? (meta.customerName || '—') : (meta.proName || getPro(proId).name);
+  const otherSub = iAmPro ? '' : catLabel(getPro(proId).cat);
   const msgs = chats[state.activeChatId] || [];
   setTimeout(()=>{ const c = document.getElementById('chatMsgs'); if(c) c.scrollTop = c.scrollHeight; }, 0);
   return `
     <div class="chat-screen" style="margin:-4px -18px -28px; height:calc(100vh - 210px)">
       <div style="display:flex; align-items:center; gap:10px; padding:0 18px 12px; border-bottom:1px solid var(--line)">
-        <div class="avatar" style="${avatarStyle(p.name)}; width:38px; height:38px; border-radius:10px; font-size:13px">${initialsOf(p.name)}</div>
-        <div><div style="font-weight:800; font-size:13.5px">${p.name}</div><div style="font-size:11px; color:var(--muted)">${catLabel(p.cat)}</div></div>
+        <div class="avatar" style="${avatarStyle(otherName)}; width:38px; height:38px; border-radius:10px; font-size:13px">${initialsOf(otherName)}</div>
+        <div><div style="font-weight:800; font-size:13.5px">${escapeHtml(otherName)}</div><div style="font-size:11px; color:var(--muted)">${otherSub}</div></div>
       </div>
       <div class="chat-msgs" id="chatMsgs">
         ${renderChatBubbles(msgs)}
@@ -1155,8 +1186,9 @@ async function sendChat(){
   const val = input.value.trim();
   if(!val) return;
   input.value = '';
-  const sender = state.role==='professional' ? 'pro' : 'customer';
+  const sender = (state.role==='professional' && isRealPro()) ? 'pro' : 'customer';
   try{
+    await window.fb.setDoc(window.fb.doc(window.fb.db,'chats',state.activeChatId), {updatedAt: window.fb.serverTimestamp(), lastMessage: val}, {merge:true});
     await window.fb.addDoc(window.fb.collection(window.fb.db,'chats',state.activeChatId,'messages'), {
       sender, text: val, createdAt: window.fb.serverTimestamp()
     });
@@ -1311,6 +1343,7 @@ function openProBooking(id){
       <p style="margin-top:8px; font-size:12px; color:var(--muted)">📍 ${escapeHtml(r.neighborhood)} ${r.landmark ? '· '+escapeHtml(r.landmark) : ''}</p>
     </div>
     ${quoteForm}
+    <button class="btn btn-outline" style="margin-top:10px" onclick="openChat('${state.currentUser.uid}','${r.customerId}')">💬 ${t('message')}</button>
   `;
   state.screen='__proBookingTemp';
 }
@@ -1482,6 +1515,20 @@ function startFirestoreSync(){
     dbPros = snap.docs.map(d=>({id:d.id, ...d.data()}));
     render();
   }, (err)=>{ console.error(err); });
+
+  if(unsubChatMeta1) unsubChatMeta1();
+  if(unsubChatMeta2) unsubChatMeta2();
+  const uid = state.currentUser.uid;
+  const q1 = window.fb.query(window.fb.collection(window.fb.db,'chats'), window.fb.where('customerId','==',uid));
+  const q2 = window.fb.query(window.fb.collection(window.fb.db,'chats'), window.fb.where('proId','==',uid));
+  function mergeMeta(snap){
+    snap.docs.forEach(d=>{ chatMeta[d.id] = d.data(); });
+    if((state.role==='customer' && state.screen==='messagesScreen') || (state.role==='professional' && state.proScreen==='pd_messages')){
+      render();
+    }
+  }
+  unsubChatMeta1 = window.fb.onSnapshot(q1, mergeMeta, (err)=>{ console.error(err); });
+  unsubChatMeta2 = window.fb.onSnapshot(q2, mergeMeta, (err)=>{ console.error(err); });
 }
 
 /* ===================== INIT ===================== */
@@ -1494,7 +1541,9 @@ window.onFirebaseAuthChange = async function(user){
     if(unsubRequests){ unsubRequests(); unsubRequests = null; }
     if(unsubChat){ unsubChat(); unsubChat = null; }
     if(unsubPros){ unsubPros(); unsubPros = null; }
-    requests = []; chats = {}; dbPros = [];
+    if(unsubChatMeta1){ unsubChatMeta1(); unsubChatMeta1 = null; }
+    if(unsubChatMeta2){ unsubChatMeta2(); unsubChatMeta2 = null; }
+    requests = []; chats = {}; chatMeta = {}; dbPros = [];
     render();
     return;
   }
@@ -1528,7 +1577,7 @@ if('serviceWorker' in navigator){
   } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
   import {
     getFirestore, collection, doc, setDoc, getDoc, addDoc, updateDoc,
-    onSnapshot, query, orderBy, serverTimestamp
+    onSnapshot, query, orderBy, where, serverTimestamp
   } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 
   const firebaseConfig = {
@@ -1547,7 +1596,7 @@ if('serviceWorker' in navigator){
   window.fb = {
     auth, db,
     createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
-    collection, doc, setDoc, getDoc, addDoc, updateDoc, onSnapshot, query, orderBy, serverTimestamp
+    collection, doc, setDoc, getDoc, addDoc, updateDoc, onSnapshot, query, orderBy, where, serverTimestamp
   };
 
   onAuthStateChanged(auth, (user) => {
