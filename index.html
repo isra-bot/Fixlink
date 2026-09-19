@@ -366,6 +366,11 @@ const I18N = {
     fullName:"Nom complet", phoneNumber:"Numéro de téléphone", password:"Mot de passe",
     createAccount:"Créer un compte", logIn:"Se connecter",
     alreadyHaveAccount:"Vous avez déjà un compte ?", noAccountYet:"Pas encore de compte ?",
+    report:"Signaler", block:"Bloquer", unblock:"Débloquer",
+    reportReason:"Motif du signalement", reportSent:"Signalement envoyé. Merci.",
+    reasonFraud:"Fraude", reasonHarassment:"Harcèlement", reasonFakeProfile:"Faux profil",
+    reasonUnsafe:"Comportement dangereux", reasonSpam:"Spam", reasonOther:"Autre",
+    submitReport:"Envoyer le signalement", userReports:"Signalements d'utilisateurs",
   },
   en:{
     tagline:"Find a trusted professional. Get the job done.",
@@ -429,6 +434,11 @@ const I18N = {
     fullName:"Full name", phoneNumber:"Phone number", password:"Password",
     createAccount:"Create account", logIn:"Log in",
     alreadyHaveAccount:"Already have an account?", noAccountYet:"No account yet?",
+    report:"Report", block:"Block", unblock:"Unblock",
+    reportReason:"Reason for report", reportSent:"Report sent. Thank you.",
+    reasonFraud:"Fraud", reasonHarassment:"Harassment", reasonFakeProfile:"Fake profile",
+    reasonUnsafe:"Unsafe behavior", reasonSpam:"Spam", reasonOther:"Other",
+    submitReport:"Submit report", userReports:"User reports",
   }
 };
 function t(k){ return I18N[state.lang][k] || k; }
@@ -530,6 +540,8 @@ let unsubChat = null;
 let unsubPros = null;
 let unsubChatMeta1 = null;
 let unsubChatMeta2 = null;
+let dbReports = [];
+let unsubReports = null;
 let favorites = loadLS('fx_favorites', []);
 let proProfile = loadLS('fx_proprofile', {availStatus:'available', emergency:false, verified:false, services:[...SEED_PROS[0].services]});
 
@@ -1160,24 +1172,32 @@ function messagesList(){
 function chatScreen(){
   const proId = state.activeChatProId, customerId = state.activeChatCustomerId;
   const iAmPro = proId === state.currentUser.uid;
+  const otherId = iAmPro ? customerId : proId;
   const meta = chatMeta[state.activeChatId] || {};
   const otherName = iAmPro ? (meta.customerName || '—') : (meta.proName || getPro(proId).name);
   const otherSub = iAmPro ? '' : catLabel(getPro(proId).cat);
   const msgs = chats[state.activeChatId] || [];
+  const iBlocked = ((state.currentUser.blocked)||[]).includes(otherId);
   setTimeout(()=>{ const c = document.getElementById('chatMsgs'); if(c) c.scrollTop = c.scrollHeight; }, 0);
   return `
     <div class="chat-screen" style="margin:-4px -18px -28px; height:calc(100vh - 210px)">
       <div style="display:flex; align-items:center; gap:10px; padding:0 18px 12px; border-bottom:1px solid var(--line)">
         <div class="avatar" style="${avatarStyle(otherName)}; width:38px; height:38px; border-radius:10px; font-size:13px">${initialsOf(otherName)}</div>
-        <div><div style="font-weight:800; font-size:13.5px">${escapeHtml(otherName)}</div><div style="font-size:11px; color:var(--muted)">${otherSub}</div></div>
+        <div style="flex:1"><div style="font-weight:800; font-size:13.5px">${escapeHtml(otherName)}</div><div style="font-size:11px; color:var(--muted)">${otherSub}</div></div>
+        <button class="pill-btn" style="font-size:11px" onclick="reportUser('${otherId}')">🚩 ${t('report')}</button>
+        <button class="pill-btn" style="font-size:11px" onclick="${iBlocked?`unblockUser('${otherId}')`:`blockUser('${otherId}')`}">${iBlocked ? '✓ '+t('unblock') : '🚫 '+t('block')}</button>
       </div>
       <div class="chat-msgs" id="chatMsgs">
         ${renderChatBubbles(msgs)}
       </div>
+      ${iBlocked ? `
+      <div class="info-card" style="margin:10px 18px">
+        <p style="margin:0; font-size:12.5px; color:var(--muted)">${state.lang==='fr' ? `Vous avez bloqu\u00e9 ${escapeHtml(otherName)}. Vous ne pouvez plus envoyer de messages.` : `You've blocked ${escapeHtml(otherName)}. You can no longer send messages.`}</p>
+      </div>` : `
       <div class="chat-input-row">
         <input id="chatInput" placeholder="${t('typeMessage')}" onkeydown="if(event.key==='Enter')sendChat()">
         <button class="send-btn" onclick="sendChat()">➤</button>
-      </div>
+      </div>`}
     </div>
   `;
 }
@@ -1185,6 +1205,10 @@ async function sendChat(){
   const input = document.getElementById('chatInput');
   const val = input.value.trim();
   if(!val) return;
+  const proId = state.activeChatProId, customerId = state.activeChatCustomerId;
+  const iAmPro = proId === state.currentUser.uid;
+  const otherId = iAmPro ? customerId : proId;
+  if(((state.currentUser.blocked)||[]).includes(otherId)) return;
   input.value = '';
   const sender = (state.role==='professional' && isRealPro()) ? 'pro' : 'customer';
   try{
@@ -1195,6 +1219,64 @@ async function sendChat(){
   }catch(err){
     showToast(state.lang==='fr' ? 'Message non envoyé.' : 'Message not sent.');
   }
+}
+
+/* Block & Report */
+async function blockUser(otherId){
+  try{
+    await window.fb.updateDoc(window.fb.doc(window.fb.db,'users',state.currentUser.uid), {
+      blocked: window.fb.arrayUnion(otherId)
+    });
+    state.currentUser.blocked = [...((state.currentUser.blocked)||[]), otherId];
+    showToast(state.lang==='fr' ? 'Utilisateur bloqué.' : 'User blocked.');
+    render();
+  }catch(e){
+    showToast(state.lang==='fr' ? 'Échec — vérifiez votre connexion.' : 'Failed — check your connection.');
+  }
+}
+async function unblockUser(otherId){
+  try{
+    await window.fb.updateDoc(window.fb.doc(window.fb.db,'users',state.currentUser.uid), {
+      blocked: window.fb.arrayRemove(otherId)
+    });
+    state.currentUser.blocked = ((state.currentUser.blocked)||[]).filter(id=>id!==otherId);
+    render();
+  }catch(e){
+    showToast(state.lang==='fr' ? 'Échec — vérifiez votre connexion.' : 'Failed — check your connection.');
+  }
+}
+function reportUser(otherId){
+  const meta = chatMeta[state.activeChatId] || {};
+  const iAmPro = state.activeChatProId === state.currentUser.uid;
+  const otherName = iAmPro ? (meta.customerName || '—') : (meta.proName || getPro(state.activeChatProId).name);
+  const reasons = ['reasonFraud','reasonHarassment','reasonFakeProfile','reasonUnsafe','reasonSpam','reasonOther'];
+  const app = document.getElementById('app');
+  const prevScreen = state.screen, prevChatId = state.activeChatId;
+  app.innerHTML = `
+    <h1 class="page-title">${t('report')}</h1>
+    <p class="page-sub">${escapeHtml(otherName)}</p>
+    <div class="info-card">
+      <h3>${t('reportReason')}</h3>
+      <select id="reportReason">${reasons.map(r=>`<option value="${r}">${t(r)}</option>`).join('')}</select>
+      <textarea id="reportDetails" placeholder="${state.lang==='fr'?'Détails (optionnel)':'Details (optional)'}" style="width:100%; min-height:70px; margin-top:10px; border-radius:10px; border:1px solid var(--line); padding:10px; font-family:inherit; background:var(--card); color:var(--ink)"></textarea>
+      <button class="btn btn-primary" style="margin-top:12px" onclick="submitReport('${otherId}')">${t('submitReport')}</button>
+    </div>
+  `;
+  window.__reportBack = ()=>{ state.screen = prevScreen; state.activeChatId = prevChatId; render(); };
+}
+async function submitReport(otherId){
+  const reason = document.getElementById('reportReason').value;
+  const details = document.getElementById('reportDetails').value.trim();
+  try{
+    await window.fb.addDoc(window.fb.collection(window.fb.db,'reports'), {
+      reporterId: state.currentUser.uid, reportedId: otherId, reason, details,
+      status:'Open', createdAt: window.fb.serverTimestamp()
+    });
+    showToast(t('reportSent'));
+  }catch(e){
+    showToast(state.lang==='fr' ? 'Échec — vérifiez votre connexion.' : 'Failed — check your connection.');
+  }
+  if(window.__reportBack) window.__reportBack();
 }
 
 function favoritesScreen(){
@@ -1491,14 +1573,20 @@ async function approveVerify(id){
 }
 function adminReports(){
   const disputes = requests.filter(r=>r.status==='Disputed');
-  if(!disputes.length) return `<h1 class="page-title">${t('reports')} & ${t('disputes')}</h1>
-    <div class="empty-state"><div class="ic">🚩</div><h3>—</h3></div>`;
   return `<h1 class="page-title">${t('reports')} & ${t('disputes')}</h1>
-    ${disputes.map(r=>{
+    <div class="section-head"><h2>${t('disputes')}</h2></div>
+    ${disputes.length ? disputes.map(r=>{
       const p = getPro(r.proId);
       return `<div class="booking-card"><div class="booking-top"><h4>${escapeHtml(p.name)}</h4><span class="status-chip sc-Disputed">${statusLabel('Disputed')}</span></div>
       <div class="booking-meta">${escapeHtml(r.service)} · ${escapeHtml(r.customerName)}</div></div>`;
-    }).join('')}`;
+    }).join('') : `<p class="page-sub">—</p>`}
+    <div class="section-head"><h2>${t('userReports')}</h2></div>
+    ${dbReports.length ? dbReports.map(r=>`<div class="booking-card">
+      <div class="booking-top"><h4>${t(r.reason) || escapeHtml(r.reason)}</h4><span class="status-chip sc-Disputed">${r.status}</span></div>
+      <div class="booking-meta">${state.lang==='fr'?'Signalé par':'Reported by'}: ${escapeHtml(r.reporterId)}</div>
+      <div class="booking-meta">${state.lang==='fr'?'Concernant':'About'}: ${escapeHtml(r.reportedId)}</div>
+      ${r.details ? `<div class="booking-meta">${escapeHtml(r.details)}</div>` : ''}
+    </div>`).join('') : `<p class="page-sub">—</p>`}`;
 }
 
 /* ===================== FIRESTORE SYNC ===================== */
@@ -1529,6 +1617,15 @@ function startFirestoreSync(){
   }
   unsubChatMeta1 = window.fb.onSnapshot(q1, mergeMeta, (err)=>{ console.error(err); });
   unsubChatMeta2 = window.fb.onSnapshot(q2, mergeMeta, (err)=>{ console.error(err); });
+
+  if(unsubReports) unsubReports();
+  if(state.currentUser.isAdmin){
+    const qr = window.fb.query(window.fb.collection(window.fb.db,'reports'), window.fb.orderBy('createdAt','desc'));
+    unsubReports = window.fb.onSnapshot(qr, (snap)=>{
+      dbReports = snap.docs.map(d=>({id:d.id, ...d.data()}));
+      if(state.role==='admin' && state.adminScreen==='ad_reports') render();
+    }, (err)=>{ console.error(err); });
+  }
 }
 
 /* ===================== INIT ===================== */
@@ -1543,7 +1640,8 @@ window.onFirebaseAuthChange = async function(user){
     if(unsubPros){ unsubPros(); unsubPros = null; }
     if(unsubChatMeta1){ unsubChatMeta1(); unsubChatMeta1 = null; }
     if(unsubChatMeta2){ unsubChatMeta2(); unsubChatMeta2 = null; }
-    requests = []; chats = {}; chatMeta = {}; dbPros = [];
+    if(unsubReports){ unsubReports(); unsubReports = null; }
+    requests = []; chats = {}; chatMeta = {}; dbPros = []; dbReports = [];
     render();
     return;
   }
@@ -1577,7 +1675,7 @@ if('serviceWorker' in navigator){
   } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
   import {
     getFirestore, collection, doc, setDoc, getDoc, addDoc, updateDoc,
-    onSnapshot, query, orderBy, where, serverTimestamp
+    onSnapshot, query, orderBy, where, arrayUnion, arrayRemove, serverTimestamp
   } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 
   const firebaseConfig = {
@@ -1596,7 +1694,7 @@ if('serviceWorker' in navigator){
   window.fb = {
     auth, db,
     createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
-    collection, doc, setDoc, getDoc, addDoc, updateDoc, onSnapshot, query, orderBy, where, serverTimestamp
+    collection, doc, setDoc, getDoc, addDoc, updateDoc, onSnapshot, query, orderBy, where, arrayUnion, arrayRemove, serverTimestamp
   };
 
   onAuthStateChanged(auth, (user) => {
