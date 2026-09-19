@@ -371,6 +371,9 @@ const I18N = {
     reasonFraud:"Fraude", reasonHarassment:"Harcèlement", reasonFakeProfile:"Faux profil",
     reasonUnsafe:"Comportement dangereux", reasonSpam:"Spam", reasonOther:"Autre",
     submitReport:"Envoyer le signalement", userReports:"Signalements d'utilisateurs",
+    suspendUser:"Suspendre l'utilisateur", markResolved:"Marquer résolu",
+    accountSuspended:"Compte suspendu", accountSuspendedMsg:"Votre compte a été suspendu par un administrateur. Contactez le support si vous pensez qu'il s'agit d'une erreur.",
+    userSuspended:"Utilisateur suspendu", reportResolved:"Signalement résolu",
   },
   en:{
     tagline:"Find a trusted professional. Get the job done.",
@@ -439,6 +442,9 @@ const I18N = {
     reasonFraud:"Fraud", reasonHarassment:"Harassment", reasonFakeProfile:"Fake profile",
     reasonUnsafe:"Unsafe behavior", reasonSpam:"Spam", reasonOther:"Other",
     submitReport:"Submit report", userReports:"User reports",
+    suspendUser:"Suspend user", markResolved:"Mark resolved",
+    accountSuspended:"Account suspended", accountSuspendedMsg:"Your account was suspended by an administrator. Contact support if you think this is a mistake.",
+    userSuspended:"User suspended", reportResolved:"Report resolved",
   }
 };
 function t(k){ return I18N[state.lang][k] || k; }
@@ -718,6 +724,19 @@ function render(){
     document.getElementById('bottomNav').innerHTML = '';
     document.getElementById('backRow').style.display = 'none';
     document.getElementById('app').innerHTML = renderAuth();
+    return;
+  }
+  if(state.currentUser.suspended){
+    document.getElementById('roleSwitch').style.display = 'none';
+    document.getElementById('roleSwitch').innerHTML = '';
+    document.getElementById('bottomNav').innerHTML = '';
+    document.getElementById('backRow').style.display = 'none';
+    document.getElementById('app').innerHTML = `
+      <div class="info-card" style="margin-top:60px; text-align:center; border:1px solid var(--clay)">
+        <h3 style="color:var(--clay)">${t('accountSuspended')}</h3>
+        <p>${t('accountSuspendedMsg')}</p>
+        <button class="btn btn-outline" style="margin-top:10px" onclick="logout()">${t('logout')}</button>
+      </div>`;
     return;
   }
   document.getElementById('roleSwitch').style.display = 'flex';
@@ -1586,7 +1605,28 @@ function adminReports(){
       <div class="booking-meta">${state.lang==='fr'?'Signalé par':'Reported by'}: ${escapeHtml(r.reporterId)}</div>
       <div class="booking-meta">${state.lang==='fr'?'Concernant':'About'}: ${escapeHtml(r.reportedId)}</div>
       ${r.details ? `<div class="booking-meta">${escapeHtml(r.details)}</div>` : ''}
+      ${r.status==='Open' ? `<div class="btn-row">
+        <button class="btn btn-outline btn-sm" onclick="suspendReportedUser('${r.reportedId}','${r.id}')">🚫 ${t('suspendUser')}</button>
+        <button class="btn btn-outline btn-sm" onclick="resolveReport('${r.id}')">✓ ${t('markResolved')}</button>
+      </div>` : ''}
     </div>`).join('') : `<p class="page-sub">—</p>`}`;
+}
+async function resolveReport(id){
+  try{
+    await window.fb.updateDoc(window.fb.doc(window.fb.db,'reports',id), {status:'Resolved'});
+    showToast(t('reportResolved'));
+  }catch(e){
+    showToast(state.lang==='fr' ? 'Échec — vérifiez votre connexion.' : 'Failed — check your connection.');
+  }
+}
+async function suspendReportedUser(reportedId, reportId){
+  try{
+    await window.fb.updateDoc(window.fb.doc(window.fb.db,'users',reportedId), {suspended:true});
+    if(reportId) await window.fb.updateDoc(window.fb.doc(window.fb.db,'reports',reportId), {status:'Resolved'});
+    showToast(t('userSuspended'));
+  }catch(e){
+    showToast(state.lang==='fr' ? 'Échec — vérifiez votre connexion.' : 'Failed — check your connection.');
+  }
 }
 
 /* ===================== FIRESTORE SYNC ===================== */
